@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Flow2API Captcha Worker",
-  "version": "1.0.0",
+  "version": "1.0.3",
   "description": "Generate Google Labs reCAPTCHA Enterprise tokens for Flow2API.",
   "permissions": [
     "storage",
@@ -9,7 +9,9 @@
     "scripting"
   ],
   "host_permissions": [
-    "https://labs.google/*"
+    "https://labs.google/*",
+    "https://flow.google.com/*",
+    "https://www.google.com/*"
   ],
   "background": {
     "service_worker": "background.js"
