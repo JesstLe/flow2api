@@ -1,3 +1,8 @@
+try {
+    importScripts("local-config.js");
+} catch (_) {
+    // Optional machine-local defaults. The file is ignored by Git.
+}
 importScripts("video-ui-download.js");
 
 let ws = null;
@@ -26,11 +31,12 @@ const FLOW_API_ROOT_URL = "https://aisandbox-pa.googleapis.com/v1";
 const FLOW_PROGRESS_POLL_INTERVAL_MS = 5000;
 const FLOW_SUBMIT_HARD_TIMEOUT_PADDING_MS = 30000;
 
+const LOCAL_SETTINGS = globalThis.FLOW2API_LOCAL_SETTINGS || {};
 const DEFAULT_SETTINGS = {
-    serverUrl: "ws://127.0.0.1:8000/captcha_ws",
-    apiKey: "",
-    routeKey: "",
-    clientLabel: ""
+    serverUrl: LOCAL_SETTINGS.serverUrl || "ws://127.0.0.1:38001/captcha_ws",
+    apiKey: LOCAL_SETTINGS.apiKey || "",
+    routeKey: LOCAL_SETTINGS.routeKey || "flow-fixed",
+    clientLabel: LOCAL_SETTINGS.clientLabel || "chrome-flow-current"
 };
 
 function getSettings() {
@@ -38,9 +44,9 @@ function getSettings() {
         chrome.storage.local.get(DEFAULT_SETTINGS, (stored) => {
             resolve({
                 serverUrl: (stored.serverUrl || DEFAULT_SETTINGS.serverUrl).trim(),
-                apiKey: (stored.apiKey || "").trim(),
-                routeKey: (stored.routeKey || "").trim(),
-                clientLabel: (stored.clientLabel || "").trim()
+                apiKey: (stored.apiKey || DEFAULT_SETTINGS.apiKey || "").trim(),
+                routeKey: (stored.routeKey || DEFAULT_SETTINGS.routeKey || "").trim(),
+                clientLabel: (stored.clientLabel || DEFAULT_SETTINGS.clientLabel || "").trim()
             });
         });
     });

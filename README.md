@@ -71,6 +71,7 @@
 - 🎨 **图片生成连续对话**
 - 🧩 **Gemini 官方请求体兼容** - 支持 `generateContent` / `streamGenerateContent`、`systemInstruction`、`contents.parts.text/inlineData/fileData`
 - ✅ **Gemini 官方格式已实测出图** - 已使用真实 Token 验证 `/models/{model}:generateContent` 可正常返回官方 `candidates[].content.parts[].inlineData`
+- 🧭 **Google Flow 权益模式** - 通过正常登录的 Flow 页面与 Chrome 扩展接入，不依赖 CDP；部署说明见 [`docs/FLOW_ENTITLEMENT_DEPLOYMENT.md`](docs/FLOW_ENTITLEMENT_DEPLOYMENT.md)
 
 ## 🚀 快速开始
 

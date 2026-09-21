@@ -37,6 +37,17 @@ class _FakeWebSocket:
         )
 
 
+class _ClosableWebSocket:
+    def __init__(self, service):
+        self.service = service
+        self.closed = False
+        self.close_code = None
+
+    async def close(self, code=1000):
+        self.closed = True
+        self.close_code = code
+
+
 class _FakeTokenManager:
     def __init__(self, tokens):
         self.tokens = tokens
@@ -46,6 +57,51 @@ class _FakeTokenManager:
 
 
 class ExtensionCaptchaServiceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_explicit_label_is_not_replaced_by_reconnecting_default_client(self):
+        service = ExtensionCaptchaService(db=_FakeDB("flow-fixed"))
+        preferred_socket = _ClosableWebSocket(service)
+        default_socket = _ClosableWebSocket(service)
+        preferred = ExtensionConnection(
+            preferred_socket,
+            route_key="flow-fixed",
+            client_label="chrome-flow-current",
+        )
+        reconnecting_default = ExtensionConnection(
+            default_socket,
+            route_key="flow-fixed",
+            client_label="chrome-default",
+        )
+        service.active_connections.extend([preferred, reconnecting_default])
+
+        await service._replace_duplicate_route_connections(reconnecting_default)
+
+        self.assertFalse(preferred_socket.closed)
+        self.assertFalse(default_socket.closed)
+        self.assertIs(service._select_raw_connection("flow-fixed"), preferred)
+
+    async def test_explicit_label_replaces_existing_default_client(self):
+        service = ExtensionCaptchaService(db=_FakeDB("flow-fixed"))
+        default_socket = _ClosableWebSocket(service)
+        preferred_socket = _ClosableWebSocket(service)
+        existing_default = ExtensionConnection(
+            default_socket,
+            route_key="flow-fixed",
+            client_label="chrome-default",
+        )
+        preferred = ExtensionConnection(
+            preferred_socket,
+            route_key="flow-fixed",
+            client_label="chrome-flow-current",
+        )
+        service.active_connections.extend([existing_default, preferred])
+
+        await service._replace_duplicate_route_connections(preferred)
+
+        self.assertTrue(default_socket.closed)
+        self.assertEqual(default_socket.close_code, 4002)
+        self.assertEqual(service.active_connections, [preferred])
+        self.assertIs(service._select_raw_connection("flow-fixed"), preferred)
+
     async def test_missing_connection_has_actionable_code(self):
         service = ExtensionCaptchaService(db=_FakeDB("9223"))
 

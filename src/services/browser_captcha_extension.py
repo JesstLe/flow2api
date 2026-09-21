@@ -149,7 +149,15 @@ class ExtensionCaptchaService:
             self.disconnect(websocket)
 
     async def _replace_duplicate_route_connections(self, current: ExtensionConnection) -> None:
-        """Keep only the newest WebSocket for one Chrome/account route."""
+        """Prefer an explicitly labelled WebSocket for one Chrome/account route.
+
+        Operators can temporarily have both an older default extension and a
+        newer, intentionally labelled extension installed.  Letting the legacy
+        client replace the labelled client on every reconnect creates a
+        disconnect loop and aborts in-flight Flow submissions.  A labelled
+        client therefore wins over ``chrome-default``/legacy clients; clients
+        with the same priority retain the previous newest-connection behavior.
+        """
         route_key = str(current.route_key or "").strip()
         if not route_key:
             return
@@ -157,19 +165,40 @@ class ExtensionCaptchaService:
             conn for conn in list(self.active_connections)
             if conn is not current and conn.route_key == route_key
         ]
+        current_priority = self._connection_priority(current)
+        if any(self._connection_priority(conn) > current_priority for conn in duplicates):
+            debug_logger.log_info(
+                f"[Extension Captcha] Keeping explicitly labelled connection for route_key={route_key}"
+            )
+            return
         for duplicate in duplicates:
             debug_logger.log_warning(
                 f"[Extension Captcha] Replacing duplicate connection for route_key={route_key}"
             )
             await self._close_connection(duplicate.websocket, code=4002)
 
+    @staticmethod
+    def _connection_priority(conn: ExtensionConnection) -> int:
+        label = str(conn.client_label or "").strip().lower()
+        if not label:
+            return 0
+        if label in {"default", "legacy", "chrome-default"}:
+            return 1
+        return 2
+
     def _select_raw_connection(self, route_key: str) -> Optional[ExtensionConnection]:
         normalized_key = (route_key or "").strip()
         if normalized_key:
-            for conn in self.active_connections:
-                if conn.route_key == normalized_key:
-                    return conn
-            return None
+            matches = [
+                conn for conn in self.active_connections
+                if conn.route_key == normalized_key
+            ]
+            if not matches:
+                return None
+            return max(
+                enumerate(matches),
+                key=lambda item: (self._connection_priority(item[1]), item[0]),
+            )[1]
         # Empty token routes are only allowed to use an empty extension route.
         # A keyed route such as "9223" belongs to a specific browser/account
         # and must never be borrowed by another token just because it is the
