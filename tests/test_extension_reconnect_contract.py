@@ -7,6 +7,27 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 class ExtensionReconnectContractTests(unittest.TestCase):
+    def test_machine_local_defaults_are_optional_and_git_ignored(self):
+        background = (REPO_ROOT / "extension" / "background.js").read_text(encoding="utf-8")
+        gitignore = (REPO_ROOT / ".gitignore").read_text(encoding="utf-8")
+        example = (REPO_ROOT / "extension" / "local-config.example.js").read_text(encoding="utf-8")
+
+        self.assertIn('importScripts("local-config.js")', background)
+        self.assertIn("FLOW2API_LOCAL_SETTINGS", background)
+        self.assertIn("extension/local-config.js", gitignore)
+        self.assertIn("replace-with-your-flow2api-api-key", example)
+        self.assertNotIn("sk-flow-", example)
+
+    def test_extension_defaults_use_dedicated_local_websocket_port(self):
+        background = (REPO_ROOT / "extension" / "background.js").read_text(encoding="utf-8")
+        options = (REPO_ROOT / "extension" / "options.js").read_text(encoding="utf-8")
+        manifest = json.loads((REPO_ROOT / "extension" / "manifest.json").read_text(encoding="utf-8"))
+
+        self.assertIn("ws://127.0.0.1:38001/captcha_ws", background)
+        self.assertIn("ws://127.0.0.1:38001/captcha_ws", options)
+        self.assertIn('routeKey: "flow-fixed"', options)
+        self.assertEqual(manifest["version"], "1.3.32")
+
     def test_manifest_enables_alarm_wakeup(self):
         manifest = json.loads((REPO_ROOT / "extension" / "manifest.json").read_text())
 
