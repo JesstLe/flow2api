@@ -1060,6 +1060,162 @@ class Database:
                 "today_errors": int(stats_data.get("today_errors") or 0)
             }
 
+    async def get_usage_audit(
+        self,
+        days: int = 7,
+        token_id: Optional[int] = None,
+        operation: Optional[str] = None,
+        status: Optional[str] = None,
+        limit: int = 100,
+    ) -> Dict[str, Any]:
+        """Return aggregated request usage for administrator audit views.
+
+        The aggregation is based on request_logs rather than token_stats so the
+        selected time window remains auditable and can be filtered by account,
+        operation, or outcome. Payloads are never returned by this method.
+        """
+        days = max(1, min(int(days or 7), 365))
+        limit = max(1, min(int(limit or 100), 500))
+        normalized_operation = str(operation or "").strip()
+        if normalized_operation not in {"", "generate_image", "generate_video", "extend_video"}:
+            normalized_operation = ""
+        normalized_status = str(status or "").strip().lower()
+        if normalized_status not in {"", "success", "error", "processing"}:
+            normalized_status = ""
+
+        where = ["rl.created_at >= datetime('now', ?)"]
+        params: List[Any] = [f"-{days} days"]
+        if token_id is not None and int(token_id) > 0:
+            where.append("rl.token_id = ?")
+            params.append(int(token_id))
+        if normalized_operation:
+            where.append("rl.operation = ?")
+            params.append(normalized_operation)
+        if normalized_status == "success":
+            where.append("rl.status_code >= 200 AND rl.status_code < 300")
+        elif normalized_status == "error":
+            where.append("rl.status_code >= 400")
+        elif normalized_status == "processing":
+            where.append("rl.status_code = 102")
+        predicate = " AND ".join(where)
+
+        async with self._connect() as db:
+            db.row_factory = aiosqlite.Row
+
+            async def fetch_one(sql: str, query_params: List[Any]) -> Dict[str, Any]:
+                cursor = await db.execute(sql, query_params)
+                row = await cursor.fetchone()
+                return dict(row) if row else {}
+
+            async def fetch_all(sql: str, query_params: List[Any]) -> List[Dict[str, Any]]:
+                cursor = await db.execute(sql, query_params)
+                rows = await cursor.fetchall()
+                return [dict(row) for row in rows]
+
+            summary = await fetch_one(
+                f"""
+                SELECT
+                    COUNT(*) AS total_requests,
+                    COALESCE(SUM(CASE WHEN rl.status_code >= 200 AND rl.status_code < 300 THEN 1 ELSE 0 END), 0) AS success_requests,
+                    COALESCE(SUM(CASE WHEN rl.status_code >= 400 THEN 1 ELSE 0 END), 0) AS error_requests,
+                    COALESCE(SUM(CASE WHEN rl.status_code = 102 THEN 1 ELSE 0 END), 0) AS processing_requests,
+                    COALESCE(SUM(CASE WHEN rl.operation = 'generate_image' THEN 1 ELSE 0 END), 0) AS image_requests,
+                    COALESCE(SUM(CASE WHEN rl.operation IN ('generate_video', 'extend_video') THEN 1 ELSE 0 END), 0) AS video_requests,
+                    ROUND(COALESCE(AVG(rl.duration), 0), 2) AS average_duration,
+                    MAX(rl.created_at) AS last_request_at,
+                    COUNT(DISTINCT rl.token_id) AS token_count,
+                    COALESCE(SUM(CASE WHEN rl.token_id IS NULL THEN 1 ELSE 0 END), 0) AS unassigned_requests
+                FROM request_logs rl
+                WHERE {predicate}
+                """,
+                params,
+            )
+            by_token = await fetch_all(
+                f"""
+                SELECT
+                    COALESCE(rl.token_id, 0) AS token_id,
+                    COALESCE(t.email, '未分配') AS token_email,
+                    COALESCE(t.name, '') AS token_username,
+                    COUNT(*) AS total_requests,
+                    COALESCE(SUM(CASE WHEN rl.status_code >= 200 AND rl.status_code < 300 THEN 1 ELSE 0 END), 0) AS success_requests,
+                    COALESCE(SUM(CASE WHEN rl.status_code >= 400 THEN 1 ELSE 0 END), 0) AS error_requests,
+                    COALESCE(SUM(CASE WHEN rl.operation = 'generate_image' THEN 1 ELSE 0 END), 0) AS image_requests,
+                    COALESCE(SUM(CASE WHEN rl.operation IN ('generate_video', 'extend_video') THEN 1 ELSE 0 END), 0) AS video_requests,
+                    ROUND(COALESCE(AVG(rl.duration), 0), 2) AS average_duration,
+                    MAX(rl.created_at) AS last_request_at
+                FROM request_logs rl
+                LEFT JOIN tokens t ON t.id = rl.token_id
+                WHERE {predicate}
+                GROUP BY rl.token_id, t.email, t.name
+                ORDER BY total_requests DESC, last_request_at DESC
+                LIMIT ?
+                """,
+                [*params, limit],
+            )
+            by_day = await fetch_all(
+                f"""
+                SELECT
+                    strftime('%Y-%m-%d', rl.created_at) AS day,
+                    COUNT(*) AS total_requests,
+                    COALESCE(SUM(CASE WHEN rl.status_code >= 200 AND rl.status_code < 300 THEN 1 ELSE 0 END), 0) AS success_requests,
+                    COALESCE(SUM(CASE WHEN rl.status_code >= 400 THEN 1 ELSE 0 END), 0) AS error_requests,
+                    COALESCE(SUM(CASE WHEN rl.operation = 'generate_image' THEN 1 ELSE 0 END), 0) AS image_requests,
+                    COALESCE(SUM(CASE WHEN rl.operation IN ('generate_video', 'extend_video') THEN 1 ELSE 0 END), 0) AS video_requests,
+                    ROUND(COALESCE(AVG(rl.duration), 0), 2) AS average_duration
+                FROM request_logs rl
+                WHERE {predicate}
+                GROUP BY day
+                ORDER BY day DESC
+                LIMIT ?
+                """,
+                [*params, limit],
+            )
+            by_model = await fetch_all(
+                f"""
+                SELECT
+                    COALESCE(json_extract(rl.request_body, '$.model'), rl.operation, '未知') AS model,
+                    COUNT(*) AS total_requests,
+                    COALESCE(SUM(CASE WHEN rl.status_code >= 200 AND rl.status_code < 300 THEN 1 ELSE 0 END), 0) AS success_requests,
+                    COALESCE(SUM(CASE WHEN rl.status_code >= 400 THEN 1 ELSE 0 END), 0) AS error_requests,
+                    ROUND(COALESCE(AVG(rl.duration), 0), 2) AS average_duration
+                FROM request_logs rl
+                WHERE {predicate}
+                GROUP BY model
+                ORDER BY total_requests DESC, model
+                LIMIT ?
+                """,
+                [*params, limit],
+            )
+            recent = await fetch_all(
+                f"""
+                SELECT
+                    rl.id, rl.token_id, COALESCE(t.email, '未分配') AS token_email,
+                    COALESCE(t.name, '') AS token_username, rl.operation,
+                    rl.status_code, rl.duration, rl.status_text, rl.progress,
+                    rl.created_at, rl.updated_at
+                FROM request_logs rl
+                LEFT JOIN tokens t ON t.id = rl.token_id
+                WHERE {predicate}
+                ORDER BY rl.created_at DESC
+                LIMIT ?
+                """,
+                [*params, limit],
+            )
+
+            return {
+                "window_days": days,
+                "filters": {
+                    "token_id": int(token_id) if token_id is not None and int(token_id) > 0 else None,
+                    "operation": normalized_operation or None,
+                    "status": normalized_status or None,
+                },
+                "summary": summary,
+                "by_token": by_token,
+                "by_day": by_day,
+                "by_model": by_model,
+                "recent": recent,
+            }
+
     async def get_system_info_stats(self) -> Dict[str, int]:
         """Get lightweight system counters used by admin dashboard"""
         async with self._connect() as db:

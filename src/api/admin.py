@@ -1472,6 +1472,25 @@ async def get_stats(token: str = Depends(verify_admin_token)):
     return await db.get_dashboard_stats()
 
 
+@router.get("/api/usage/audit")
+async def get_usage_audit(
+    days: int = 7,
+    token_id: Optional[int] = None,
+    operation: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = 100,
+    token: str = Depends(verify_admin_token),
+):
+    """Return per-account usage aggregates for administrator auditing."""
+    return await db.get_usage_audit(
+        days=days,
+        token_id=token_id,
+        operation=operation,
+        status=status,
+        limit=limit,
+    )
+
+
 @router.get("/api/logs")
 async def get_logs(
     limit: int = 100,
